@@ -2,11 +2,15 @@
 
   <PropertyGroup>
     <TargetFrameworks>net7.0</TargetFrameworks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Management.Automation" Version="7.3.0" PrivateAssets="all" />
-    <ProjectReference Include="../../../RemoteForge/src/RemoteForge/RemoteForge.csproj" Private="false" />
+    <Reference Include="RemoteForge" Private="false" >
+      <HintPath>../../../RemoteForge/output/RemoteForge/0.1.0/bin/net7.0/RemoteForge.dll</HintPath>
+    </Reference>
   </ItemGroup>
+
 </Project>

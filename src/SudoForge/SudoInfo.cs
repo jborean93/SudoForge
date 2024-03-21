@@ -1,11 +1,11 @@
 using RemoteForge;
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
+using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace SudoForge;
@@ -20,54 +20,8 @@ public sealed class SudoInfo : IRemoteForge
     public static IRemoteForge Create(string info)
         => new SudoInfo();
 
-    public IRemoteForgeTransport CreateTransport()
-        => new SudoTransport(Credential);
-
-    // public async Task StartTransport(
-    //     ChannelReader<string> reader,
-    //     ChannelWriter<string> writer,
-    //     CancellationToken cancellationToken)
-    // {
-    //     using Process proc = Process.Start("");
-
-    //     await proc.WaitForExitAsync();
-    // }
-}
-
-public sealed class SudoTransport : IRemoteForgeTransport
-{
-    private readonly ChannelReader<(bool, string?)> _reader;
-    private readonly ChannelWriter<(bool, string?)> _writer;
-    private readonly Runspace? _runspace;
-    private readonly string? _sudoUser;
-
-    private Process? _proc;
-
-    internal SudoTransport(
-        PSCredential? credential)
+    public RemoteTransport CreateTransport()
     {
-        Channel<(bool, string?)> channel = Channel.CreateUnbounded<(bool, string?)>();
-        _reader = channel.Reader;
-        _writer = channel.Writer;
-
-        if (credential != null)
-        {
-            _sudoUser = credential.UserName;
-            _runspace = RunspaceFactory.CreateRunspace();
-            _runspace.Open();
-            _runspace.SessionStateProxy.SetVariable("sudo", credential.Password);
-        }
-    }
-
-    public Task CreateConnection(CancellationToken cancellationToken)
-    {
-        // On Linux the command line value has .dll, we need to remove that.
-        string cmd = Environment.GetCommandLineArgs()[0];
-        if (cmd.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-        {
-            cmd = cmd[..(cmd.Length - 4)];
-        }
-
         string askPassScript = Path.GetFullPath(Path.Combine(
             Path.GetDirectoryName(typeof(SudoTransport).Assembly.Location)!,
             "..",
@@ -78,105 +32,92 @@ public sealed class SudoTransport : IRemoteForgeTransport
             throw new FileNotFoundException($"Failed to find ask_pass.ps1 script at '{askPassScript}'");
         }
 
-        _proc = new()
+        List<string> sudoArgs = new();
+        if (Credential != null && !string.Equals(Credential.UserName, "root", StringComparison.OrdinalIgnoreCase))
         {
-            StartInfo = new()
-            {
-                FileName = "sudo",
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                WindowStyle = ProcessWindowStyle.Hidden,
-                CreateNoWindow = true,
-            }
-        };
-        _proc.StartInfo.Environment.Add("SUDO_ASKPASS", askPassScript);
-        if (_runspace != null)
-        {
-            _proc.StartInfo.Environment.Add("SUDOFORGE_RID", _runspace.Id.ToString());
+            sudoArgs.Add($"--user={Credential.UserName}");
         }
 
-        if (_sudoUser != null && _sudoUser != "root")
+        sudoArgs.AddRange(new[]
         {
-            _proc.StartInfo.ArgumentList.Add($"--user={_sudoUser}");
-        }
-        _proc.StartInfo.ArgumentList.Add("--askpass");
-        _proc.StartInfo.ArgumentList.Add(cmd);
-        _proc.StartInfo.ArgumentList.Add("-NoLogo");
-        _proc.StartInfo.ArgumentList.Add("-ServerMode");
-        _proc.Start();
-
-        Task stdoutTask = Task.Run(async () => await PumpStream(_proc.StandardOutput, false));
-        Task stderrTask = Task.Run(async () => await PumpStream(_proc.StandardError, true));
-        Task.Run(async () =>
-        {
-            try
-            {
-                await _proc.WaitForExitAsync();
-                await stdoutTask;
-                await stderrTask;
-            }
-            finally
-            {
-                _writer.Complete();
-            }
+            "--askpass",
+            Environment.ProcessPath!,
+            "-NoLogo",
+            "-ServerMode"
         });
 
-        return Task.CompletedTask;
-    }
-
-    private async Task PumpStream(StreamReader reader, bool isError)
-    {
-        while (true)
+        Dictionary<string, string> envVars = new()
         {
-            string? msg = await reader.ReadLineAsync();
-            if (string.IsNullOrWhiteSpace(msg))
-            {
-                break;
-            }
+            { "SUDO_ASKPASS", askPassScript },
+            { "SUDOFORGE_PID", Environment.ProcessId.ToString() },
+        };
 
-            await _writer.WriteAsync((isError, msg));
+        return new SudoTransport("sudo", sudoArgs, envVars, Credential?.GetNetworkCredential()?.Password);
+    }
+}
+
+public sealed class SudoTransport : ProcessTransport
+{
+    private Runspace? _runspace;
+
+    internal SudoTransport(
+        string executable,
+        IEnumerable<string> arguments,
+        Dictionary<string, string> environment,
+        string? password) : base(executable, arguments, environment)
+
+    {
+        if (password != null)
+        {
+            _runspace = RunspaceFactory.CreateRunspace();
+            _runspace.Open();
+            _runspace.SessionStateProxy.SetVariable("sudo", password);
+            Proc.StartInfo.Environment.Add("SUDOFORGE_RID", _runspace.Id.ToString());
         }
     }
 
-    public async Task CloseConnection(CancellationToken cancellationToken)
+    protected override async Task<string?> ReadOutput(CancellationToken cancellationToken)
     {
-        if (_proc != null)
+        string? msg = await base.ReadOutput(cancellationToken);
+
+        // Once we receive a message we don't need to keep the password in
+        // the Runspace state anymore.
+        if (_runspace != null)
         {
-            _proc.Kill();
-            await _reader.Completion;
+            _runspace.Dispose();
+            _runspace = null;
         }
+
+        return msg;
     }
 
-    public async Task WriteMessage(string message, CancellationToken cancellationToken)
+    protected override Task Close(CancellationToken cancellationToken)
     {
-        Debug.Assert(_proc != null);
-        await _proc.StandardInput.WriteLineAsync(message.AsMemory(), cancellationToken);
+        // .NET Kill() method send SIGKILL but sudo cannot handle that
+        // and pass it along to its children. It can handle SIGTERM but .NET
+        // doesn't expose that so we need to use some PInvoke to tell the pwsh
+        // subprocess to exit.
+        Libc.kill(Proc.Id, Libc.SIGTERM);
+
+        // The base method should still be called after sending SIGTERM so that
+        // the normal cleanup behaviour is done.
+        return base.Close(cancellationToken);
     }
 
-    public async Task<string?> WaitMessage(CancellationToken cancellationToken)
+    protected override void Dispose(bool isDisposing)
     {
-        Debug.Assert(_proc != null);
-        try
+        if (isDisposing && _runspace != null)
         {
-            (bool isError, string? msg) = await _reader.ReadAsync(cancellationToken);
-            if (isError)
-            {
-                throw new Exception(msg);
-            }
-
-            return msg;
+            _runspace.Dispose();
         }
-        catch (ChannelClosedException)
-        {
-            return null;
-        }
+        base.Dispose(isDisposing);
     }
+}
 
-    public void Dispose()
-    {
-        _proc?.Dispose();
-        _proc = null;
-    }
+internal partial class Libc
+{
+    public const int SIGTERM = 15;
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int kill(int pid, int sig);
 }

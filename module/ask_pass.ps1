@@ -2,14 +2,12 @@
 
 using namespace System.Management.Automation.Runspaces
 using namespace System.Net
+using namespace System.Reflection
 
 # First arg is prompt from sudo itself.
 param ([string]$Prompt)
 
 $ErrorActionPreference = 'Stop'
-
-# Parent is sudo, grandparent is the pwsh process
-$parentPid = (Get-Process -Id $pid).Parent.Parent.Id
 
 if ($env:SUDOFORGE_RID) {
     # If SUDOFORGE_RID is set the password is stored in the runspace specified
@@ -33,7 +31,7 @@ else {
         $rs = Get-Runspace -Id 1
         $remoteHost = $rs.GetType().GetProperty(
             'Host',
-            [System.Reflection.BindingFlags]'Instance, NonPublic'
+            [BindingFlags]'Instance, NonPublic'
         ).GetValue($rs)
         $remoteHost.UI.Write($args[0])
         $remoteHost.UI.ReadLineAsSecureString()
@@ -42,7 +40,7 @@ else {
     $argument = $Prompt
 }
 
-$ci = [NamedPipeConnectionInfo]::new($parentPid)
+$ci = [NamedPipeConnectionInfo]::new([int]$env:SUDOFORGE_PID)
 $rs = $ps = $null
 try {
     $rs = [runspacefactory]::CreateRunspace($ci)

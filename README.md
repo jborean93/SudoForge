@@ -1,8 +1,5 @@
 # PowerShell SudoForge
 
-[![Test workflow](https://github.com/jborean93/SudoForge/workflows/Test%20SudoForge/badge.svg)](https://github.com/jborean93/SudoForge/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/jborean93/SudoForge/branch/main/graph/badge.svg?token=b51IOhpLfQ)](https://codecov.io/gh/jborean93/SudoForge)
-[![PowerShell Gallery](https://img.shields.io/powershellgallery/dt/SudoForge.svg)](https://www.powershellgallery.com/packages/SudoForge)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jborean93/SudoForge/blob/main/LICENSE)
 
 PowerShell RemoteForge implementation for a sudo wrapped process.
@@ -18,25 +15,25 @@ These cmdlets have the following requirements
 
 ## Examples
 
-TODO
+The follow example runs the scriptblock specified under a new PowerShell process under `sudo`.
+
+```powershell
+Invoke-Remote sudo: { whoami }
+```
+
+The next example shows how a custom credential can be specified for non-interactive purposes.
+How the credential is created can be done through various means like through a `SecretStore`.
+
+```powershell
+# Prompts for the password in this example
+$sudoInfo = New-SudoForgeInfo -Credential root
+
+Invoke-Remote $sudoInfo { whoami }
+```
 
 ## Installing
 
-The easiest way to install this module is through [PowerShellGet](https://docs.microsoft.com/en-us/powershell/gallery/overview).
-
-You can install this module by running either of the following `Install-PSResource` or `Install-Module` command.
-
-```powershell
-# Install for only the current user
-Install-PSResource -Name SudoForge -Scope CurrentUser
-Install-Module -Name SudoForge -Scope CurrentUser
-
-# Install for all users
-Install-PSResource -Name SudoForge -Scope AllUsers
-Install-Module -Name SudoForge -Scope AllUsers
-```
-
-The `Install-PSResource` cmdlet is part of the new `PSResourceGet` module from Microsoft available in newer versions while `Install-Module` is present on older systems.
+This module is not available in the gallery at this point in time as it is more a POC for `RemoteForge`.
 
 ## Contributing
 
