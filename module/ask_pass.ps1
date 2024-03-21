@@ -2,7 +2,6 @@
 
 using namespace System.Management.Automation.Runspaces
 using namespace System.Net
-using namespace System.Reflection
 
 # First arg is prompt from sudo itself.
 param ([string]$Prompt)
@@ -31,7 +30,7 @@ else {
         $rs = Get-Runspace -Id 1
         $remoteHost = $rs.GetType().GetProperty(
             'Host',
-            [BindingFlags]'Instance, NonPublic'
+            [System.Reflection.BindingFlags]'Instance, NonPublic'
         ).GetValue($rs)
         $remoteHost.UI.Write($args[0])
         $remoteHost.UI.ReadLineAsSecureString()
